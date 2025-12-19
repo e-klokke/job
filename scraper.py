@@ -7,14 +7,13 @@ from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
 
-# 1. Target Titles (Using SINGULAR forms to catch plurals too)
-# "Solution Engineer" matches "Solutions Engineer" AND "Solution Engineer"
+# 1. Target Titles (Singular matches plurals)
 TARGET_TITLES = [
-    "Solution Engineer",       # Catches "Solutions" too
+    "Solution Engineer",       # Matches "Solutions Engineer"
     "Implementation Engineer",
-    "Customer Success",        # Broader: matches "Customer Success Engineer" or "Manager"
+    "Customer Success",        # Matches "Customer Success Engineer/Manager"
     "Sales Engineer",
-    "Account Manager",         # Broader: matches "Technical Account Manager"
+    "Account Manager",         # Matches "Technical Account Manager"
     "TAM",
     "VoIP",
     "Unified Communication",
@@ -22,14 +21,21 @@ TARGET_TITLES = [
     "Cybersecurity",
     "Network Security",
     "Forward Deployed",
-    "Pre-Sales",               # Common synonym
-    "Post-Sales"               # Common synonym
+    "Pre-Sales",
+    "Post-Sales"
 ]
 
-# 2. AI Keywords
+# 2. AI Keywords (Pivot)
 AI_KEYWORDS = [
     "AI", "Artificial Intelligence", "LLM", "RAG", "Machine Learning", 
     "Generative", "Claude", "OpenAI", "NLP", "Model"
+]
+
+# 3. Sports Tech Keywords (Purple Squirrel)
+SPORTS_KEYWORDS = [
+    "Sports", "Athlete", "Fitness", "Wearable", "NBA", "NFL", "NCAA", 
+    "Hudl", "Strava", "DraftKings", "FanDuel", "ESPN", "Stadium", 
+    "Fan Experience", "Player Tracking", "Catapult", "Peloton", "Gaming"
 ]
 
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
@@ -44,36 +50,76 @@ def score_job(title, description):
     title_clean = normalize_title(title)
     desc_clean = description.lower() if description else ""
     
-    # Check if ANY of your target titles exist in the job title
+    # 1. Check Title (Required)
     is_target_role = any(role.lower() in title_clean for role in TARGET_TITLES)
-    is_ai = any(k.lower() in title_clean or k.lower() in desc_clean for k in AI_KEYWORDS)
     
-    return is_target_role, is_ai
+    # 2. Check Context (Bonus)
+    is_ai = any(k.lower() in title_clean or k.lower() in desc_clean for k in AI_KEYWORDS)
+    is_sports = any(k.lower() in title_clean or k.lower() in desc_clean for k in SPORTS_KEYWORDS)
+    
+    return is_target_role, is_ai, is_sports
 
-def add_job(source, title, url, date_str, is_ai):
-    icon = "🤖" if is_ai else "💼"
+def add_job(source, title, url, date_str, is_ai, is_sports):
+    # Icons: Sports (🏅) > AI (🤖) > Standard (💼)
+    if is_sports: icon = "🏅"
+    elif is_ai: icon = "🤖"
+    else: icon = "💼"
+    
     found_jobs.append({
         "source": source,
         "title": f"{icon} {title}",
         "url": url,
         "date": date_str,
-        "is_ai": is_ai
+        "is_ai": is_ai,
+        "is_sports": is_sports
     })
 
 def is_recent(pub_date_obj):
-    """
-    Checks if job is within the last 7 DAYS (to ensure you see results).
-    """
-    if not pub_date_obj: return True # If no date, assume fresh
-    # Calculate difference
-    if pub_date_obj.tzinfo:
-        # If timezone aware, compare with timezone aware now
-        return datetime.now(pub_date_obj.tzinfo) - pub_date_obj < timedelta(days=7)
-    else:
-        # If naive, compare with naive now
-        return datetime.now() - pub_date_obj < timedelta(days=7)
+    """Checks if job is within last 7 days"""
+    if not pub_date_obj: return True
+    now = datetime.now(pub_date_obj.tzinfo) if pub_date_obj.tzinfo else datetime.now()
+    return now - pub_date_obj < timedelta(days=7)
 
 # --- SOURCES ---
+
+def get_himalayas_jobs():
+    """Himalayas.app (High quality tech/sales roles)"""
+    print("Checking Himalayas...")
+    # They have a clean RSS feed for all jobs
+    url = "https://himalayas.app/feed"
+    try:
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            try:
+                published = datetime.strptime(entry.published, "%a, %d %b %Y %H:%M:%S %z")
+            except:
+                published = None
+                
+            if is_recent(published):
+                is_role, is_ai, is_sports = score_job(entry.title, entry.summary)
+                if is_role:
+                    add_job("Himalayas", entry.title, entry.link, "Recent", is_ai, is_sports)
+    except Exception as e:
+        print(f"Error Himalayas: {e}")
+
+def get_jobspresso_jobs():
+    """Jobspresso (Curated remote jobs)"""
+    print("Checking Jobspresso...")
+    url = "https://jobspresso.co/feed/"
+    try:
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            try:
+                published = datetime.strptime(entry.published, "%a, %d %b %Y %H:%M:%S %z")
+            except:
+                published = None
+            
+            if is_recent(published):
+                is_role, is_ai, is_sports = score_job(entry.title, entry.description)
+                if is_role:
+                    add_job("Jobspresso", entry.title, entry.link, "Recent", is_ai, is_sports)
+    except Exception as e:
+        print(f"Error Jobspresso: {e}")
 
 def get_wwr_jobs():
     print("Checking We Work Remotely...")
@@ -83,25 +129,21 @@ def get_wwr_jobs():
         "https://weworkremotely.com/categories/remote-customer-support-jobs.rss",
         "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss"
     ]
-    count = 0
     for url in urls:
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries:
-                count += 1
-                # Parse date properly
                 try:
                     published = datetime.strptime(entry.published, "%a, %d %b %Y %H:%M:%S %z")
                 except:
                     published = None
                 
                 if is_recent(published):
-                    is_role, is_ai = score_job(entry.title, entry.summary)
+                    is_role, is_ai, is_sports = score_job(entry.title, entry.summary)
                     if is_role:
-                        add_job("WWR", entry.title, entry.link, "Recent", is_ai)
+                        add_job("WWR", entry.title, entry.link, "Recent", is_ai, is_sports)
         except Exception as e:
             print(f"Error WWR: {e}")
-    print(f"  > Scanned {count} items from WWR")
 
 def get_remoteok_jobs():
     print("Checking RemoteOK...")
@@ -109,13 +151,10 @@ def get_remoteok_jobs():
         headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get('https://remoteok.com/api', headers=headers)
         data = r.json()
-        print(f"  > Scanned {len(data)} items from RemoteOK")
-        
         for job in data[1:]: 
-            # RemoteOK dates are tricky, we'll accept the top 50 recent ones
-            is_role, is_ai = score_job(job.get('position', ''), job.get('description', ''))
+            is_role, is_ai, is_sports = score_job(job.get('position', ''), job.get('description', ''))
             if is_role:
-                add_job("RemoteOK", job.get('position'), job.get('url'), "Recent", is_ai)
+                add_job("RemoteOK", job.get('position'), job.get('url'), "Recent", is_ai, is_sports)
     except Exception as e:
         print(f"Error RemoteOK: {e}")
 
@@ -128,15 +167,12 @@ def get_working_nomads():
             "https://www.workingnomads.com/jobs?category=development&rss=1",
             "https://www.workingnomads.com/jobs?category=system-administration&rss=1"
         ]
-        count = 0
         for url in urls:
             feed = feedparser.parse(url)
-            count += len(feed.entries)
             for entry in feed.entries:
-                is_role, is_ai = score_job(entry.title, entry.description)
+                is_role, is_ai, is_sports = score_job(entry.title, entry.description)
                 if is_role:
-                    add_job("WorkingNomads", entry.title, entry.link, "Recent", is_ai)
-        print(f"  > Scanned {count} items from Working Nomads")
+                    add_job("WorkingNomads", entry.title, entry.link, "Recent", is_ai, is_sports)
     except Exception as e:
         print(f"Error Working Nomads: {e}")
 
@@ -145,36 +181,32 @@ def get_remotive_jobs():
     try:
         r = requests.get('https://remotive.com/api/remote-jobs')
         data = r.json()
-        jobs = data.get('jobs', [])
-        print(f"  > Scanned {len(jobs)} items from Remotive")
-        
-        for job in jobs:
-            # Parse date
+        for job in data.get('jobs', []):
             try:
                 pub_date = datetime.strptime(job.get('publication_date'), "%Y-%m-%dT%H:%M:%S")
-                if not is_recent(pub_date):
-                    continue
-            except:
-                pass 
+                if not is_recent(pub_date): continue
+            except: pass 
 
-            is_role, is_ai = score_job(job.get('title'), job.get('description'))
+            is_role, is_ai, is_sports = score_job(job.get('title'), job.get('description'))
             if is_role:
-                add_job("Remotive", job.get('title'), job.get('url'), "Recent", is_ai)
+                add_job("Remotive", job.get('title'), job.get('url'), "Recent", is_ai, is_sports)
     except Exception as e:
         print(f"Error Remotive: {e}")
 
 def send_slack_alert():
     if not found_jobs:
-        print("No matching jobs found today.")
-        # Send a debug message so you know it actually scanned something
-        payload = {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "⚠️ *Debug:* Scanned feeds but found 0 matches. (Try broadening keywords)"}}]}
+        # Debug message to ensure it ran
+        print("No matches found.")
+        payload = {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "✅ *Job Monitor Ran:* No new matches found (Last 7 Days)."}}]}
         if SLACK_WEBHOOK_URL:
             requests.post(SLACK_WEBHOOK_URL, json=payload)
         return
 
-    # Deduplicate
+    # Deduplicate by URL
     unique_jobs = {job['url']: job for job in found_jobs}.values()
-    sorted_jobs = sorted(unique_jobs, key=lambda x: x['is_ai'], reverse=True)
+    
+    # Sort Priority: Sports > AI > Core
+    sorted_jobs = sorted(unique_jobs, key=lambda x: (x['is_sports'], x['is_ai']), reverse=True)
     count = len(sorted_jobs)
     
     print(f"Found {count} matching jobs. Sending to Slack...")
@@ -184,13 +216,14 @@ def send_slack_alert():
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🚀 {count} Roles Found (Last 7 Days)"
+                "text": f"🚀 {count} Roles Found (6 Sources)"
             }
         },
         {"type": "divider"}
     ]
 
-    for job in list(sorted_jobs)[:20]: # Show top 20
+    # Show top 25 results
+    for job in list(sorted_jobs)[:25]:
         blocks.append({
             "type": "section",
             "text": {
@@ -203,8 +236,12 @@ def send_slack_alert():
     
     if SLACK_WEBHOOK_URL:
         requests.post(SLACK_WEBHOOK_URL, json=payload)
+    else:
+        print(json.dumps(payload, indent=2))
 
 if __name__ == "__main__":
+    get_himalayas_jobs()   # NEW
+    get_jobspresso_jobs()  # NEW
     get_wwr_jobs()
     get_remoteok_jobs()
     get_working_nomads()
