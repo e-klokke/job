@@ -1,3 +1,28 @@
+name: Job Scraper Cron
+
 on:
   schedule:
-    - cron: '0 */6 * * *' # Runs at 00:00, 06:00, 12:00, 18:00
+    - cron: '0 */6 * * *'  # Runs every 6 hours at 00:00, 06:00, 12:00, 18:00
+  workflow_dispatch:      # Allows manual trigger button
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests feedparser
+
+      - name: Run Scraper
+        run: python scraper.py
+        env:
+            # If you add email/Slack alerts, put API keys here
+            SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
